@@ -16,46 +16,36 @@ if "results_df" not in st.session_state:
 if "next_mises" not in st.session_state:
     st.session_state.next_mises = {}
 
-# --- Paiements ---
-payouts = {
-    "1": 1,
-    "Bar": 20,
-    "Disco": 25,
-    "VIPDisco": 50,
-    "StayingAlive": 20,
-    "P": 25, "L": 25, "A": 25, "Y": 25,
-    "F": 25, "U": 25, "N": 25, "K": 25,
-    "T": 25, "I": 25, "M": 25, "E": 25,
-}
+# --- Paiements / segments ---
+segments_letters = list("PLAYFUNKTIME")
+segments = segments_letters + ["StayingAlive"]
 
 # --- Fonctions ---
 def calc_gain(result, mult, mise):
-    lettres = list("PLAYFUNKTIME")
-    if result in lettres:
-        return 25 * mise * mult
-    elif result == "StayingAlive":
-        return 50 * mise * mult
-    else:
-        return 0
+    """Gain = (mise x multiplicateur) + mise"""
+    return mise * mult + mise
 
 def adjust_mise(bankroll, last_mise, last_gain):
-    """Ajuste la mise minimale selon bankroll et Martingale"""
+    """Ajuste la mise selon Martingale et bankroll"""
     if last_gain == 0:
-        mise = last_mise * 2
+        # Perte -> doubler ou ajuster par fractions ou multiples
+        mise = min(bankroll/2, last_mise * 2)
+        if mise < 1:
+            mise = 1
+        elif mise > 5:
+            mise = 5
     else:
         mise = 1  # reset à la mise initiale après gain
-
-    # Ne jamais dépasser la moitié du bankroll ni descendre en dessous de 1$
-    mise = max(1, min(mise, bankroll / 2))
     return mise
 
 def suggest_strategy(last_spin, last_gain, last_mise, bankroll):
-    segments = list("PLAYFUNKTIME")
+    """Stratégie Martingale lettres + Staying Alive (pas sur Staying Alive si sorti tour précédent)"""
+    next_segments = segments_letters.copy()
     if last_spin != "StayingAlive":
-        segments.append("StayingAlive")
-
+        next_segments.append("StayingAlive")
+    
     mise = adjust_mise(bankroll, last_mise, last_gain)
-    next_mises = {seg: mise for seg in segments}
+    next_mises = {seg: mise for seg in next_segments}
 
     strategy = "❌ Perte -> Doubler/ajuster mise" if last_gain == 0 else "✅ Gain -> Maintenir/ajuster mise"
     return strategy, next_mises
@@ -63,8 +53,8 @@ def suggest_strategy(last_spin, last_gain, last_mise, bankroll):
 def process_spin(result, mult):
     last_mise = st.session_state.results_df["Mise"].iloc[-1] if not st.session_state.results_df.empty else 1
     last_bankroll = st.session_state.results_df["Bankroll"].iloc[-1] if not st.session_state.results_df.empty else 150
-    last_spin_val = st.session_state.results_df["Résultat"].iloc[-1] if not st.session_state.results_df.empty else None
     last_gain = st.session_state.results_df["Gain"].iloc[-1] if not st.session_state.results_df.empty else 0
+    last_spin_val = st.session_state.results_df["Résultat"].iloc[-1] if not st.session_state.results_df.empty else None
 
     gain = calc_gain(result, mult, last_mise)
     new_bankroll = last_bankroll + gain - last_mise
@@ -89,8 +79,8 @@ st.title("🎰 Funky Time - Bot Martingale Dynamique")
 
 # Sidebar: ajouter spins
 st.sidebar.header("📥 Ajouter spin à l'historique")
-result = st.sidebar.radio("Résultat :", ["1","Bar","Disco","VIPDisco","StayingAlive"] + list("PLAYFUNKTIME"), horizontal=True)
-mult = st.sidebar.number_input("Multiplicateur (Top Slot)", min_value=1, value=1, step=1)
+result = st.sidebar.radio("Résultat :", segments, horizontal=True)
+mult = st.sidebar.number_input("Multiplicateur (Top Slot ou Staying Alive)", min_value=1, value=1, step=1)
 
 if st.sidebar.button("➕ Ajouter au tableau"):
     spin_num = len(st.session_state.history) + 1
@@ -114,7 +104,10 @@ if st.sidebar.button("✅ Fin historique et commencer"):
         result = spin["Résultat"]
         mult = spin["Multiplicateur"]
 
-        if result == "StayingAlive" and last_spin == "StayingAlive":
+        # Ne jamais miser sur le 1
+        if result == "1":
+            mise = 0
+        elif result == "StayingAlive" and last_spin == "StayingAlive":
             mise = 0
         else:
             mise = base_mise
@@ -149,7 +142,7 @@ if not st.session_state.results_df.empty:
 # --- Mode live ---
 if st.session_state.mode_live:
     st.subheader("🎯 Mode Live - spin par spin")
-    live_result = st.radio("Spin Live :", ["1","Bar","Disco","VIPDisco","StayingAlive"] + list("PLAYFUNKTIME"), horizontal=True)
+    live_result = st.radio("Spin Live :", segments, horizontal=True)
     live_mult = st.number_input("Multiplicateur Live", min_value=1, value=1, step=1)
 
     if st.button("➡️ Entrer spin Live"):
