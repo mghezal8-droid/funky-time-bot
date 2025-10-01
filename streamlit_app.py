@@ -16,37 +16,28 @@ if "results_df" not in st.session_state:
 if "next_mises" not in st.session_state:
     st.session_state.next_mises = {}
 
-# --- Paiements / segments ---
+# --- Segments ---
 segments_letters = list("PLAYFUNKTIME")
-segments = segments_letters + ["StayingAlive"]
+segments = ["1", "Bar", "Disco", "VIPDisco", "StayingAlive"] + segments_letters
 
 # --- Fonctions ---
 def calc_gain(result, mult, mise):
-    """Gain = (mise x multiplicateur) + mise"""
     return mise * mult + mise
 
 def adjust_mise(bankroll, last_mise, last_gain):
-    """Ajuste la mise selon Martingale et bankroll"""
     if last_gain == 0:
-        # Perte -> doubler ou ajuster par fractions ou multiples
         mise = min(bankroll/2, last_mise * 2)
-        if mise < 1:
-            mise = 1
-        elif mise > 5:
-            mise = 5
+        mise = max(1, min(mise, 5))
     else:
-        mise = 1  # reset à la mise initiale après gain
+        mise = 1
     return mise
 
 def suggest_strategy(last_spin, last_gain, last_mise, bankroll):
-    """Stratégie Martingale lettres + Staying Alive (pas sur Staying Alive si sorti tour précédent)"""
     next_segments = segments_letters.copy()
     if last_spin != "StayingAlive":
         next_segments.append("StayingAlive")
-    
     mise = adjust_mise(bankroll, last_mise, last_gain)
     next_mises = {seg: mise for seg in next_segments}
-
     strategy = "❌ Perte -> Doubler/ajuster mise" if last_gain == 0 else "✅ Gain -> Maintenir/ajuster mise"
     return strategy, next_mises
 
@@ -56,14 +47,15 @@ def process_spin(result, mult):
     last_gain = st.session_state.results_df["Gain"].iloc[-1] if not st.session_state.results_df.empty else 0
     last_spin_val = st.session_state.results_df["Résultat"].iloc[-1] if not st.session_state.results_df.empty else None
 
-    gain = calc_gain(result, mult, last_mise)
-    new_bankroll = last_bankroll + gain - last_mise
+    mise_appliquee = 0 if result == "1" else last_mise
+    gain = calc_gain(result, mult, mise_appliquee)
+    new_bankroll = last_bankroll + gain - mise_appliquee
 
     new_row = {
         "Spin": len(st.session_state.results_df) + 1,
         "Résultat": result,
         "Multiplicateur": mult,
-        "Mise": last_mise,
+        "Mise": mise_appliquee,
         "Gain": gain,
         "Bankroll": new_bankroll
     }
@@ -77,15 +69,15 @@ def process_spin(result, mult):
 # --- Interface ---
 st.title("🎰 Funky Time - Bot Martingale Dynamique")
 
-# Sidebar: ajouter spins
+# --- Sidebar historique ---
 st.sidebar.header("📥 Ajouter spin à l'historique")
-result = st.sidebar.radio("Résultat :", segments, horizontal=True)
 mult = st.sidebar.number_input("Multiplicateur (Top Slot ou Staying Alive)", min_value=1, value=1, step=1)
 
-if st.sidebar.button("➕ Ajouter au tableau"):
-    spin_num = len(st.session_state.history) + 1
-    st.session_state.history.append({"Spin": spin_num, "Résultat": result, "Multiplicateur": mult})
-    st.session_state.results_df = pd.DataFrame(st.session_state.history)
+for seg in segments:
+    if st.sidebar.button(f"{seg} ➕ Historique"):
+        spin_num = len(st.session_state.history) + 1
+        st.session_state.history.append({"Spin": spin_num, "Résultat": seg, "Multiplicateur": mult})
+        st.session_state.results_df = pd.DataFrame(st.session_state.history)
 
 if st.sidebar.button("🗑 Supprimer dernier spin"):
     if st.session_state.history:
@@ -104,7 +96,6 @@ if st.sidebar.button("✅ Fin historique et commencer"):
         result = spin["Résultat"]
         mult = spin["Multiplicateur"]
 
-        # Ne jamais miser sur le 1
         if result == "1":
             mise = 0
         elif result == "StayingAlive" and last_spin == "StayingAlive":
@@ -115,7 +106,6 @@ if st.sidebar.button("✅ Fin historique et commencer"):
         gain = calc_gain(result, mult, mise)
         bankroll += gain - mise
 
-        # Ajustement Martingale + mise minimale automatique
         base_mise = adjust_mise(bankroll, base_mise, gain)
 
         mises.append(mise)
@@ -142,14 +132,12 @@ if not st.session_state.results_df.empty:
 # --- Mode live ---
 if st.session_state.mode_live:
     st.subheader("🎯 Mode Live - spin par spin")
-    live_result = st.radio("Spin Live :", segments, horizontal=True)
-    live_mult = st.number_input("Multiplicateur Live", min_value=1, value=1, step=1)
+    mult_live = st.number_input("Multiplicateur Live", min_value=1, value=1, step=1)
+    for seg in segments:
+        if st.button(f"{seg} ➡️ Live Spin"):
+            strategy = process_spin(seg, mult_live)
+            st.success(f"Spin ajouté : {seg} x{mult_live} | Stratégie suggérée : {strategy}")
 
-    if st.button("➡️ Entrer spin Live"):
-        strategy = process_spin(live_result, live_mult)
-        st.success(f"Spin ajouté : {live_result} x{live_mult} | Stratégie suggérée : {strategy}")
-
-    # Affichage mises conseillées
     if st.session_state.next_mises:
         st.subheader("📌 Mise conseillée pour le prochain spin")
         mises_df = pd.DataFrame(list(st.session_state.next_mises.items()), columns=["Segment", "Mise ($)"])
