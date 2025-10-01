@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 
-st.set_page_config(page_title="Funky Time Bot - Martingale Base", layout="wide")
+st.set_page_config(page_title="Funky Time Bot - Martingale Sécurisée", layout="wide")
 
 # --- Initialisation ---
 if "history" not in st.session_state:
@@ -18,6 +18,8 @@ if "last_spin_val" not in st.session_state:
     st.session_state.last_spin_val = None
 if "last_gain" not in st.session_state:
     st.session_state.last_gain = 0
+if "base_option" not in st.session_state:
+    st.session_state.base_option = 1  # 1 pour 13$, 2 pour 6.5$
 
 # --- Segments ---
 segments_letters = list("PLAYFUNKTIME")
@@ -37,29 +39,44 @@ def calc_gain_net(result, mises, mult):
         gain_net = -total_mise
     return gain_net, total_mise
 
-def adjust_mises_after_spin(last_gain, bank_base=150):
-    """
-    Martingale : doubler après perte, revenir à base après gain
-    """
-    base_mises = {seg:1 for seg in segments_letters}
-    base_mises["StayingAlive"] = 1
-    if last_gain < 0:
-        # Perte → double la mise
-        next_mises = {seg:m*2 for seg,m in base_mises.items()}
+def generate_mises_option(option=1):
+    if option==1:
+        mises = {seg:1 for seg in segments_letters}
+        mises["StayingAlive"]=1
     else:
-        # Gain → retour à la base
-        next_mises = base_mises.copy()
-    return next_mises
+        mises = {seg:0.5 for seg in segments_letters}
+        mises["StayingAlive"]=0.5
+    return mises
 
-def process_spin(result,mult,mises_utilisees,last_bankroll):
+def adjust_mises_martingale(last_gain, last_mises, bankroll):
+    base_mises = generate_mises_option(st.session_state.base_option)
+    if last_gain >= 0:
+        next_mises = base_mises.copy()
+        warning = ""
+    else:
+        next_mises = {seg:m*2 for seg,m in last_mises.items()}
+        total_next = sum(next_mises.values())
+        warning = ""
+        if total_next > bankroll:
+            scale = bankroll / total_next
+            next_mises = {seg:m*scale for seg,m in next_mises.items()}
+            warning = f"⚠️ Attention : bankroll insuffisant pour doubler, mise ajustée à {bankroll:.2f}$"
+    return next_mises, warning
+
+def process_spin(result,mult,mises_utilisees,last_bankroll,last_gain):
     gain_net,total_mise = calc_gain_net(result,mises_utilisees,mult)
     new_bankroll = last_bankroll + gain_net
-    next_mises = adjust_mises_after_spin(gain_net)
-    strategy = "Martingale sur Lettres+Staying Alive"
-    return gain_net,total_mise,new_bankroll,strategy,next_mises
+    next_mises, warning = adjust_mises_martingale(gain_net, mises_utilisees, new_bankroll)
+    strategy = "Martingale Lettres+Staying Alive"
+    return gain_net,total_mise,new_bankroll,strategy,next_mises, warning
 
 # --- Interface ---
-st.title("🎰 Funky Time Bot - Martingale Base 13$")
+st.title("🎰 Funky Time Bot - Martingale Sécurisée")
+
+# --- Choix mise de base pour toute la simulation ---
+st.sidebar.header("⚙️ Paramètres de simulation")
+base_option = st.sidebar.radio("Mise de base :", ["13$ (1$ par segment)","6.5$ (0.5$ par segment)"])
+st.session_state.base_option = 1 if base_option=="13$ (1$ par segment)" else 2
 
 # --- Sidebar historique ---
 st.sidebar.header("📥 Ajouter spin à l'historique")
@@ -81,16 +98,18 @@ if st.sidebar.button("✅ Fin historique et commencer"):
     bankroll = 150
     last_spin_val = None
     last_gain = 0
-    last_mises = {seg:1 for seg in segments_letters}
-    last_mises["StayingAlive"]=1
+    last_mises = generate_mises_option(st.session_state.base_option)
     results=[]
+    warning_msg=""
     for spin in st.session_state.history:
         result = spin["Résultat"]
         mult = spin["Multiplicateur"]
         mises_utilisees = last_mises.copy()
         if last_spin_val=="StayingAlive":
             mises_utilisees["StayingAlive"]=0
-        gain_net,total_mise,new_bankroll,strategy,next_mises = process_spin(result,mult,mises_utilisees,bankroll)
+        gain_net,total_mise,new_bankroll,strategy,next_mises, warning = process_spin(result,mult,mises_utilisees,bankroll,last_gain)
+        if warning:
+            warning_msg = warning
         results.append({
             "Spin":spin["Spin"],
             "Résultat":result,
@@ -108,6 +127,8 @@ if st.sidebar.button("✅ Fin historique et commencer"):
     st.session_state.mode_live=True
     st.session_state.last_spin_val=last_spin_val
     st.session_state.last_gain=last_gain
+    if warning_msg:
+        st.warning(warning_msg)
 
 # --- Tableau historique ---
 st.subheader("📜 Historique des spins")
@@ -119,6 +140,7 @@ if not st.session_state.results_df.empty:
 if st.session_state.mode_live:
     st.subheader("🎯 Mode Live - spin par spin")
     mult_live = st.number_input("Multiplicateur Live",min_value=1,value=1,step=1)
+    
     st.subheader("Cliquer sur un segment pour live spin")
     for seg in segments:
         if st.button(f"{seg} ➡️ Live Spin"):
@@ -128,7 +150,7 @@ if st.session_state.mode_live:
             mises_utilisees = st.session_state.next_mises.copy()
             if last_spin_val=="StayingAlive":
                 mises_utilisees["StayingAlive"]=0
-            gain_net,total_mise,new_bankroll,strategy,next_mises = process_spin(seg,mult_live,mises_utilisees,last_bankroll)
+            gain_net,total_mise,new_bankroll,strategy,next_mises, warning = process_spin(seg,mult_live,mises_utilisees,last_bankroll,last_gain)
             new_row = {
                 "Spin":len(st.session_state.results_df)+1,
                 "Résultat":seg,
@@ -142,6 +164,8 @@ if st.session_state.mode_live:
             st.session_state.last_spin_val = seg
             st.session_state.last_gain = gain_net
             st.success(f"Spin ajouté : {seg} x{mult_live} | Stratégie suggérée : {strategy}")
+            if warning:
+                st.warning(warning)
 
     if st.session_state.next_mises:
         st.subheader("📌 Mise conseillée pour le prochain spin")
