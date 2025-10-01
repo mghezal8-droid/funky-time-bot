@@ -38,33 +38,26 @@ def calc_gain(result, mult, mise):
     else:
         return 0
 
-def adjust_mise(bankroll, base_mise, last_gain):
-    """Ajustement dynamique de la mise selon bankroll et dernier gain/perte"""
+def adjust_mise(bankroll, last_mise, last_gain):
+    """Ajuste la mise minimale selon bankroll et Martingale"""
     if last_gain == 0:
-        # Perte -> doubler mise (Martingale)
-        mise = min(base_mise * 2, bankroll/2)
+        mise = last_mise * 2
     else:
-        # Gain -> mise de base ajustée selon bankroll
-        mise = min(base_mise, bankroll/2)
-    # Limiter mise minimale
-    return max(mise, 1)
+        mise = 1  # reset à la mise initiale après gain
+
+    # Ne jamais dépasser la moitié du bankroll ni descendre en dessous de 1$
+    mise = max(1, min(mise, bankroll / 2))
+    return mise
 
 def suggest_strategy(last_spin, last_gain, last_mise, bankroll):
     segments = list("PLAYFUNKTIME")
     if last_spin != "StayingAlive":
         segments.append("StayingAlive")
 
-    next_mises = {}
     mise = adjust_mise(bankroll, last_mise, last_gain)
-    
-    if last_gain == 0:
-        strategy = "❌ Perte -> Doubler/ajuster mise (Martingale)"
-    else:
-        strategy = "✅ Gain -> Maintenir/ajuster mise"
+    next_mises = {seg: mise for seg in segments}
 
-    for seg in segments:
-        next_mises[seg] = mise
-
+    strategy = "❌ Perte -> Doubler/ajuster mise" if last_gain == 0 else "✅ Gain -> Maintenir/ajuster mise"
     return strategy, next_mises
 
 def process_spin(result, mult):
@@ -129,7 +122,7 @@ if st.sidebar.button("✅ Fin historique et commencer"):
         gain = calc_gain(result, mult, mise)
         bankroll += gain - mise
 
-        # Ajustement dynamique
+        # Ajustement Martingale + mise minimale automatique
         base_mise = adjust_mise(bankroll, base_mise, gain)
 
         mises.append(mise)
