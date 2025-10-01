@@ -30,11 +30,11 @@ segments = segments_others + segments_letters
 def calc_gain_net(result, mises, mult):
     total_mise = sum(mises.values())
     if result in segments_letters:
-        gain = mises[result]*25
-        gain_net = gain - total_mise
-    elif result=="StayingAlive":
-        gain = mises[result]*mult
-        gain_net = gain - total_mise
+        n = mises[result]
+        gain_net = (n * 25 + n) - (total_mise - n)
+    elif result == "StayingAlive":
+        n = mises[result]
+        gain_net = (n * mult + n) - (total_mise - n)
     else:
         gain_net = -total_mise
     return gain_net, total_mise
