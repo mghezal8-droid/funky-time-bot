@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 
-st.set_page_config(page_title="Funky Time Bot - Auto-ajustement", layout="wide")
+st.set_page_config(page_title="Funky Time Bot - Martingale Coherente", layout="wide")
 
 # --- Initialisation ---
 if "history" not in st.session_state:
@@ -14,6 +14,8 @@ if "next_mises" not in st.session_state:
     st.session_state.next_mises = {}
 if "mode_live" not in st.session_state:
     st.session_state.mode_live = False
+if "last_spin_val" not in st.session_state:
+    st.session_state.last_spin_val = None
 
 # --- Segments ---
 segments_letters = list("PLAYFUNKTIME")
@@ -35,17 +37,18 @@ def calc_gain_net(result, mises, mult):
 
 def adjust_mises_dynamic(bankroll,last_mises,last_gain,bankroll_base=150):
     """
-    Ajustement automatique des mises selon bankroll + martingale
+    Ajustement automatique et martingale
     """
     next_mises = {}
     multiplier = max(1, round(bankroll/bankroll_base))
     for seg,mise in last_mises.items():
-        if last_gain <= 0:
+        # martingale : doubler la mise si perte sur ce segment
+        if last_gain < 0:
             mise_new = min(bankroll/2, mise*2)
-            mise_new = max(1, mise_new)  # Minimum 1$
+            mise_new = max(1, mise_new)
         else:
             mise_new = mise * multiplier
-        next_mises[seg]=mise_new
+        next_mises[seg] = mise_new
     return next_mises
 
 def suggest_strategy_dynamic(last_spin,last_gain,last_mises,bankroll):
@@ -53,17 +56,14 @@ def suggest_strategy_dynamic(last_spin,last_gain,last_mises,bankroll):
     strategy = "No Bets" if sum(next_mises.values())==0 else "Martingale Dynamique Auto"
     return strategy, next_mises
 
-def process_spin_dynamic(result,mult,last_spin_val,last_bankroll):
-    mises = {seg:1 for seg in segments_letters}
-    if last_spin_val != "StayingAlive":
-        mises["StayingAlive"]=1
-    gain_net,total_mise = calc_gain_net(result,mises,mult)
+def process_spin_dynamic(result,mult,mises_utilisees,last_bankroll):
+    gain_net,total_mise = calc_gain_net(result,mises_utilisees,mult)
     new_bankroll = last_bankroll + gain_net
-    strategy,next_mises = suggest_strategy_dynamic(result,gain_net,mises,new_bankroll)
+    strategy,next_mises = suggest_strategy_dynamic(result,gain_net,mises_utilisees,new_bankroll)
     return gain_net,total_mise,new_bankroll,strategy,next_mises
 
 # --- Interface ---
-st.title("🎰 Funky Time Bot - Auto-ajustement Dynamique")
+st.title("🎰 Funky Time Bot - Martingale Coherente")
 
 # --- Sidebar historique ---
 st.sidebar.header("📥 Ajouter spin à l'historique")
@@ -84,11 +84,19 @@ if st.sidebar.button("🗑 Supprimer dernier spin"):
 if st.sidebar.button("✅ Fin historique et commencer"):
     bankroll = 150
     last_spin_val = None
+    mises_base = {seg:1 for seg in segments_letters}
+    mises_base["StayingAlive"] = 1
     results=[]
+    last_mises = mises_base.copy()
     for spin in st.session_state.history:
         result = spin["Résultat"]
         mult = spin["Multiplicateur"]
-        gain_net,total_mise,new_bankroll,strategy,next_mises = process_spin_dynamic(result,mult,last_spin_val,bankroll)
+        # on utilise les mises suggérées pour ce spin
+        mises_utilisees = last_mises.copy()
+        # on ne mise pas sur Staying Alive si sorti tour précédent
+        if last_spin_val == "StayingAlive":
+            mises_utilisees["StayingAlive"] = 0
+        gain_net,total_mise,new_bankroll,strategy,next_mises = process_spin_dynamic(result,mult,mises_utilisees,bankroll)
         results.append({
             "Spin":spin["Spin"],
             "Résultat":result,
@@ -99,9 +107,11 @@ if st.sidebar.button("✅ Fin historique et commencer"):
         })
         last_spin_val=result
         bankroll=new_bankroll
+        last_mises = next_mises.copy()
         st.session_state.next_mises = next_mises
     st.session_state.results_df = pd.DataFrame(results)
     st.session_state.mode_live=True
+    st.session_state.last_spin_val = last_spin_val
 
 # --- Tableau historique ---
 st.subheader("📜 Historique des spins")
@@ -118,7 +128,11 @@ if st.session_state.mode_live:
         if st.button(f"{seg} ➡️ Live Spin"):
             last_bankroll = st.session_state.results_df["Bankroll"].iloc[-1] if not st.session_state.results_df.empty else 150
             last_spin_val = st.session_state.results_df["Résultat"].iloc[-1] if not st.session_state.results_df.empty else None
-            gain_net,total_mise,new_bankroll,strategy,next_mises = process_spin_dynamic(seg,mult_live,last_spin_val,last_bankroll)
+            # mises utilisées = dernières mises suggérées
+            mises_utilisees = st.session_state.next_mises.copy()
+            if last_spin_val == "StayingAlive":
+                mises_utilisees["StayingAlive"]=0
+            gain_net,total_mise,new_bankroll,strategy,next_mises = process_spin_dynamic(seg,mult_live,mises_utilisees,last_bankroll)
             new_row = {
                 "Spin":len(st.session_state.results_df)+1,
                 "Résultat":seg,
@@ -129,6 +143,7 @@ if st.session_state.mode_live:
             }
             st.session_state.results_df = pd.concat([st.session_state.results_df,pd.DataFrame([new_row])],ignore_index=True)
             st.session_state.next_mises = next_mises
+            st.session_state.last_spin_val = seg
             st.success(f"Spin ajouté : {seg} x{mult_live} | Stratégie suggérée : {strategy}")
 
     if st.session_state.next_mises:
