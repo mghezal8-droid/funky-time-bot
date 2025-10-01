@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 
-st.set_page_config(page_title="Funky Time Bot - Martingale Coherente", layout="wide")
+st.set_page_config(page_title="Funky Time Bot - Martingale Base", layout="wide")
 
 # --- Initialisation ---
 if "history" not in st.session_state:
@@ -16,6 +16,8 @@ if "mode_live" not in st.session_state:
     st.session_state.mode_live = False
 if "last_spin_val" not in st.session_state:
     st.session_state.last_spin_val = None
+if "last_gain" not in st.session_state:
+    st.session_state.last_gain = 0
 
 # --- Segments ---
 segments_letters = list("PLAYFUNKTIME")
@@ -35,35 +37,29 @@ def calc_gain_net(result, mises, mult):
         gain_net = -total_mise
     return gain_net, total_mise
 
-def adjust_mises_dynamic(bankroll,last_mises,last_gain,bankroll_base=150):
+def adjust_mises_after_spin(last_gain, bank_base=150):
     """
-    Ajustement automatique et martingale
+    Martingale : doubler après perte, revenir à base après gain
     """
-    next_mises = {}
-    multiplier = max(1, round(bankroll/bankroll_base))
-    for seg,mise in last_mises.items():
-        # martingale : doubler la mise si perte sur ce segment
-        if last_gain < 0:
-            mise_new = min(bankroll/2, mise*2)
-            mise_new = max(1, mise_new)
-        else:
-            mise_new = mise * multiplier
-        next_mises[seg] = mise_new
+    base_mises = {seg:1 for seg in segments_letters}
+    base_mises["StayingAlive"] = 1
+    if last_gain < 0:
+        # Perte → double la mise
+        next_mises = {seg:m*2 for seg,m in base_mises.items()}
+    else:
+        # Gain → retour à la base
+        next_mises = base_mises.copy()
     return next_mises
 
-def suggest_strategy_dynamic(last_spin,last_gain,last_mises,bankroll):
-    next_mises = adjust_mises_dynamic(bankroll,last_mises,last_gain)
-    strategy = "No Bets" if sum(next_mises.values())==0 else "Martingale Dynamique Auto"
-    return strategy, next_mises
-
-def process_spin_dynamic(result,mult,mises_utilisees,last_bankroll):
+def process_spin(result,mult,mises_utilisees,last_bankroll):
     gain_net,total_mise = calc_gain_net(result,mises_utilisees,mult)
     new_bankroll = last_bankroll + gain_net
-    strategy,next_mises = suggest_strategy_dynamic(result,gain_net,mises_utilisees,new_bankroll)
+    next_mises = adjust_mises_after_spin(gain_net)
+    strategy = "Martingale sur Lettres+Staying Alive"
     return gain_net,total_mise,new_bankroll,strategy,next_mises
 
 # --- Interface ---
-st.title("🎰 Funky Time Bot - Martingale Coherente")
+st.title("🎰 Funky Time Bot - Martingale Base 13$")
 
 # --- Sidebar historique ---
 st.sidebar.header("📥 Ajouter spin à l'historique")
@@ -84,19 +80,17 @@ if st.sidebar.button("🗑 Supprimer dernier spin"):
 if st.sidebar.button("✅ Fin historique et commencer"):
     bankroll = 150
     last_spin_val = None
-    mises_base = {seg:1 for seg in segments_letters}
-    mises_base["StayingAlive"] = 1
+    last_gain = 0
+    last_mises = {seg:1 for seg in segments_letters}
+    last_mises["StayingAlive"]=1
     results=[]
-    last_mises = mises_base.copy()
     for spin in st.session_state.history:
         result = spin["Résultat"]
         mult = spin["Multiplicateur"]
-        # on utilise les mises suggérées pour ce spin
         mises_utilisees = last_mises.copy()
-        # on ne mise pas sur Staying Alive si sorti tour précédent
-        if last_spin_val == "StayingAlive":
-            mises_utilisees["StayingAlive"] = 0
-        gain_net,total_mise,new_bankroll,strategy,next_mises = process_spin_dynamic(result,mult,mises_utilisees,bankroll)
+        if last_spin_val=="StayingAlive":
+            mises_utilisees["StayingAlive"]=0
+        gain_net,total_mise,new_bankroll,strategy,next_mises = process_spin(result,mult,mises_utilisees,bankroll)
         results.append({
             "Spin":spin["Spin"],
             "Résultat":result,
@@ -106,12 +100,14 @@ if st.sidebar.button("✅ Fin historique et commencer"):
             "Bankroll":new_bankroll
         })
         last_spin_val=result
+        last_gain=gain_net
+        last_mises=next_mises.copy()
         bankroll=new_bankroll
-        last_mises = next_mises.copy()
-        st.session_state.next_mises = next_mises
+        st.session_state.next_mises=next_mises
     st.session_state.results_df = pd.DataFrame(results)
     st.session_state.mode_live=True
-    st.session_state.last_spin_val = last_spin_val
+    st.session_state.last_spin_val=last_spin_val
+    st.session_state.last_gain=last_gain
 
 # --- Tableau historique ---
 st.subheader("📜 Historique des spins")
@@ -128,11 +124,11 @@ if st.session_state.mode_live:
         if st.button(f"{seg} ➡️ Live Spin"):
             last_bankroll = st.session_state.results_df["Bankroll"].iloc[-1] if not st.session_state.results_df.empty else 150
             last_spin_val = st.session_state.results_df["Résultat"].iloc[-1] if not st.session_state.results_df.empty else None
-            # mises utilisées = dernières mises suggérées
+            last_gain = st.session_state.last_gain
             mises_utilisees = st.session_state.next_mises.copy()
-            if last_spin_val == "StayingAlive":
+            if last_spin_val=="StayingAlive":
                 mises_utilisees["StayingAlive"]=0
-            gain_net,total_mise,new_bankroll,strategy,next_mises = process_spin_dynamic(seg,mult_live,mises_utilisees,last_bankroll)
+            gain_net,total_mise,new_bankroll,strategy,next_mises = process_spin(seg,mult_live,mises_utilisees,last_bankroll)
             new_row = {
                 "Spin":len(st.session_state.results_df)+1,
                 "Résultat":seg,
@@ -144,6 +140,7 @@ if st.session_state.mode_live:
             st.session_state.results_df = pd.concat([st.session_state.results_df,pd.DataFrame([new_row])],ignore_index=True)
             st.session_state.next_mises = next_mises
             st.session_state.last_spin_val = seg
+            st.session_state.last_gain = gain_net
             st.success(f"Spin ajouté : {seg} x{mult_live} | Stratégie suggérée : {strategy}")
 
     if st.session_state.next_mises:
