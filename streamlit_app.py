@@ -13,11 +13,10 @@ PAYOUTS = {
     "P": 25, "L": 25, "A": 25, "Y": 25,
     "F": 25, "U": 25, "N": 25, "K": 25,
     "T": 25, "I": 25, "M": 25, "E": 25,
-    "StayingAlive": 0,  # bonus segments gérés séparément
+    "StayingAlive": 0,
     "VIPDisco": 0
 }
 
-# Répartition exacte des segments sur la roue
 SEGMENT_COUNTS = {
     "1": 28,
     "Bar": 6,
@@ -29,12 +28,12 @@ SEGMENT_COUNTS = {
     "VIPDisco": 1
 }
 TOTAL_SEGMENTS = sum(SEGMENT_COUNTS.values())
-
 BONUS_SEGMENTS = ["StayingAlive", "VIPDisco"]
-ALL_SEGMENTS = ["1", "Bar", "Disco"] + list("PLAYFUNKTIME") + BONUS_SEGMENTS
+LETTERS = list("PLAYFUNKTIME")
+ALL_SEGMENTS = ["1", "Bar", "Disco"] + LETTERS + BONUS_SEGMENTS
 
 # ===========================
-# SESSION STATE INITIALIZATION
+# SESSION STATE
 # ===========================
 st.set_page_config(page_title="Funky Time Bot", layout="centered")
 if "history" not in st.session_state: st.session_state.history = []
@@ -46,7 +45,7 @@ if "martingale_loss" not in st.session_state: st.session_state.martingale_loss =
 if "skip_bonus" not in st.session_state: st.session_state.skip_bonus = None
 
 # ===========================
-# Helpers: unité réaliste
+# Helpers
 # ===========================
 def get_unit(bankroll: float):
     if bankroll < 200: return 1
@@ -54,25 +53,19 @@ def get_unit(bankroll: float):
     elif bankroll < 1000: return 4
     else: return 10
 
-# ===========================
-# Probabilités combinées historique + théorique
-# ===========================
 def compute_probabilities(history):
     counts = {seg: 0 for seg in ALL_SEGMENTS}
     total_hist = len(history)
     for spin in history:
         seg = spin["result"].split("x")[0].strip()
         if seg in counts: counts[seg] += 1
-    # Probabilité historique
     prob_hist = {seg: counts[seg]/total_hist for seg in ALL_SEGMENTS} if total_hist>0 else {seg:0 for seg in ALL_SEGMENTS}
-    # Probabilité théorique
     prob_theo = {seg: SEGMENT_COUNTS[seg]/TOTAL_SEGMENTS for seg in ALL_SEGMENTS}
-    # Combinaison pondérée (50% historique, 50% théorique)
     probs = {seg:0.5*(prob_hist.get(seg,0)+prob_theo.get(seg,0)) for seg in ALL_SEGMENTS}
     return probs
 
 # ===========================
-# Stratégies (Funky Time)
+# STRATEGIES
 # ===========================
 def martingale_one(bankroll):
     unit = get_unit(bankroll)
@@ -83,28 +76,28 @@ def martingale_one(bankroll):
 def god_mode(bankroll):
     unit = get_unit(bankroll)
     strat = {"Bar": 2*unit, "Disco": 1*unit}
-    for l in "PLAYFUNKTIME": strat[l] = 1*unit
+    for l in LETTERS: strat[l] = 1*unit
     return strat, "God Mode"
 
 def god_mode_bonus(bankroll):
     unit = get_unit(bankroll)
     strat = {"Bar": 0.8*unit, "Disco": 0.4*unit}
-    for l in "PLAYFUNKTIME": strat[l] = 0.4*unit
+    for l in LETTERS: strat[l] = 0.4*unit
     for b in BONUS_SEGMENTS:
         if st.session_state.skip_bonus == b: continue
         strat[b] = 0.2*unit
     return strat, "God Mode + Bonus"
 
-def one_plus_bonus(bankroll):
+def one_plus_letters_bonus(bankroll):
     unit = get_unit(bankroll)
     strat = {}
-    for l in "PLAYFUNKTIME": strat[l] = 0.5*unit
+    for l in LETTERS: strat[l] = 0.4*unit
+    strat["Bar"] = 1*unit
+    strat["Disco"] = 1*unit
     for b in BONUS_SEGMENTS:
         if st.session_state.skip_bonus == b: continue
-        strat[b] = 0.5*unit
-    total_other = sum(strat.values())
-    strat["1"] = round(total_other,2)
-    return strat, "1 + Bonus (Break-even si 1)"
+        strat[b] = 0.2*unit
+    return strat, "1 + Letters + Bonus"
 
 # ===========================
 # Choix stratégie
@@ -113,14 +106,19 @@ def expected_score_strategy(strat_dict, probs):
     return sum(probs.get(seg,0) * mise for seg, mise in strat_dict.items())
 
 def choose_strategy(history, bankroll):
+    # Priorité martingale si perte précédente
     if st.session_state.martingale_loss > 0:
         strat, name = martingale_one(bankroll)
         st.session_state.strategy_repeat_count = 0
         st.session_state.last_strategy_name = name
         return strat, name
-
+    # Calcul probabilités
     probs = compute_probabilities(history)
-    candidates = [god_mode(bankroll), god_mode_bonus(bankroll), one_plus_bonus(bankroll)]
+    candidates = [
+        god_mode(bankroll),
+        god_mode_bonus(bankroll),
+        one_plus_letters_bonus(bankroll)
+    ]
     best = {}; best_name = "No Bets"; best_score = -1
     for strat_dict, name in candidates:
         score = expected_score_strategy(strat_dict, probs)
@@ -131,12 +129,13 @@ def choose_strategy(history, bankroll):
     if best_score < 0.05: best = {}; best_name = "No Bets"
     if best_name == st.session_state.last_strategy_name:
         st.session_state.strategy_repeat_count += 1
-    else: st.session_state.strategy_repeat_count = 0
+    else:
+        st.session_state.strategy_repeat_count = 0
     st.session_state.last_strategy_name = best_name
     return best, best_name
 
 # ===========================
-# Calcul gains
+# Calcul gain
 # ===========================
 def calculate_gain(spin_text, strategy):
     s = spin_text.replace("X","x")
@@ -156,8 +155,7 @@ def calculate_gain(spin_text, strategy):
 # ===========================
 # UI / Streamlit
 # ===========================
-st.title("🎵 Funky Time Bot — Streamlit")
-
+st.title("🎵 Funky Time Bot — Optimisé Long Terme")
 st.sidebar.header("⚙️ Paramètres")
 st.session_state.bankroll = st.sidebar.number_input(
     "Bankroll initiale ($)", min_value=50.0, max_value=5000.0,
